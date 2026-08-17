@@ -1,6 +1,0 @@
-{
-  "name": "Good쌤 수업 대시보드",
-  "description": "Good쌤 수업 학습지 실시간 제출 현황 모니터링, 차시별 제출률 통계 시각화, 레벨업 RPG 시스템 및 멘토 포인트 랭킹 대시보드",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
