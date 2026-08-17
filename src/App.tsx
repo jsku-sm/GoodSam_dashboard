@@ -1,11 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 type Tab = 'overview' | 'levels' | 'mentors' | 'quest';
-type ClassFilter = '전체' | '1-1' | '1-2' | '1-3' | '1-4' | '1-5' | '1-6' | '1-7';
+type ClassName = '1-1' | '1-2' | '1-3' | '1-4' | '1-5' | '1-6' | '1-7';
+type ClassFilter = '전체' | ClassName;
 
 type StudentBase = {
   id: string;
-  className: Exclude<ClassFilter, '전체'>;
+  className: ClassName;
   name: string;
 };
 
@@ -27,10 +28,21 @@ type ToastState = {
   kind: 'success' | 'level' | 'info';
 } | null;
 
-const SESSIONS = Array.from({ length: 18 }, (_, i) => i + 1);
-const CLASS_NAMES: ClassFilter[] = ['전체', '1-1', '1-2', '1-3', '1-4', '1-5', '1-6', '1-7'];
-const STORAGE_KEY = 'goodssam-rpg-v2-students';
-const LOG_KEY = 'goodssam-rpg-v2-mentor-logs';
+const CLASS_NAMES: ClassName[] = ['1-1', '1-2', '1-3', '1-4', '1-5', '1-6', '1-7'];
+const STORAGE_KEY = 'goodssam-rpg-v3-reset-students';
+const LOG_KEY = 'goodssam-rpg-v3-reset-mentor-logs';
+
+// 1,2,4,5반: 주 2회 × 16주 = 32차시
+// 3,6,7반: 주 1회 × 16주 = 16차시
+const CLASS_SESSION_LIMIT: Record<ClassName, number> = {
+  '1-1': 32,
+  '1-2': 32,
+  '1-3': 16,
+  '1-4': 32,
+  '1-5': 32,
+  '1-6': 16,
+  '1-7': 16,
+};
 
 const ROSTER: StudentBase[] = [
   // 1-1
@@ -186,65 +198,50 @@ const ROSTER: StudentBase[] = [
 ];
 
 const LEVELS = [
-  { level: 1, emoji: '🌱', title: '수학 새싹', min: 0, max: 3 },
-  { level: 2, emoji: '📚', title: '성실한 학습자', min: 4, max: 7 },
-  { level: 3, emoji: '⚔️', title: '베테랑 수학자', min: 8, max: 11 },
-  { level: 4, emoji: '🌟', title: '수열 마스터', min: 12, max: 15 },
-  { level: 5, emoji: '👑', title: '전설의 수학왕', min: 16, max: 18 },
+  { level: 1, emoji: '🌱', title: '수학 새싹' },
+  { level: 2, emoji: '📚', title: '성실한 학습자' },
+  { level: 3, emoji: '⚔️', title: '베테랑 수학자' },
+  { level: 4, emoji: '🌟', title: '수학 마스터' },
+  { level: 5, emoji: '👑', title: '전설의 수학왕' },
 ] as const;
 
+function classStudentCount(className: ClassName) {
+  return ROSTER.filter((s) => s.className === className).length;
+}
+
+function sessionsForClass(className: ClassName) {
+  return Array.from({ length: CLASS_SESSION_LIMIT[className] }, (_, i) => i + 1);
+}
+
 function initialStudents(): StudentState[] {
+  // 완전 초기화: 제출 0, 멘토 포인트 0
   return ROSTER.map((s) => ({ ...s, completed: [], mentorPoints: 0 }));
 }
 
-function getLevel(count: number) {
-  if (count >= 16) {
-    return {
-      level: 5,
-      emoji: '👑',
-      title: '전설의 수학왕',
-      xp: count - 15,
-      maxXp: 3,
-      next: 18,
-    };
-  }
-  if (count >= 12) {
-    return {
-      level: 4,
-      emoji: '🌟',
-      title: '수열 마스터',
-      xp: count - 11,
-      maxXp: 4,
-      next: 16,
-    };
-  }
-  if (count >= 8) {
-    return {
-      level: 3,
-      emoji: '⚔️',
-      title: '베테랑 수학자',
-      xp: count - 7,
-      maxXp: 4,
-      next: 12,
-    };
-  }
-  if (count >= 4) {
-    return {
-      level: 2,
-      emoji: '📚',
-      title: '성실한 학습자',
-      xp: count - 3,
-      maxXp: 4,
-      next: 8,
-    };
-  }
+function getLevel(student: StudentState) {
+  const total = CLASS_SESSION_LIMIT[student.className];
+  const ratio = total === 0 ? 0 : student.completed.length / total;
+
+  let level = 1;
+  if (ratio >= 0.8) level = 5;
+  else if (ratio >= 0.6) level = 4;
+  else if (ratio >= 0.4) level = 3;
+  else if (ratio >= 0.2) level = 2;
+
+  const starts = [0, 0, 0.2, 0.4, 0.6, 0.8];
+  const ends = [0, 0.2, 0.4, 0.6, 0.8, 1];
+  const startCount = Math.ceil(total * starts[level]);
+  const endCount = level === 5 ? total : Math.ceil(total * ends[level]);
+  const xp = Math.max(0, student.completed.length - startCount);
+  const maxXp = Math.max(1, endCount - startCount);
+
   return {
-    level: 1,
-    emoji: '🌱',
-    title: '수학 새싹',
-    xp: count,
-    maxXp: 4,
-    next: 4,
+    level,
+    emoji: LEVELS[level - 1].emoji,
+    title: LEVELS[level - 1].title,
+    xp,
+    maxXp,
+    next: endCount,
   };
 }
 
@@ -269,14 +266,11 @@ function fireConfetti() {
   }
 
   const dpr = window.devicePixelRatio || 1;
-  const resize = () => {
-    canvas.width = window.innerWidth * dpr;
-    canvas.height = window.innerHeight * dpr;
-    canvas.style.width = `${window.innerWidth}px`;
-    canvas.style.height = `${window.innerHeight}px`;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  };
-  resize();
+  canvas.width = window.innerWidth * dpr;
+  canvas.height = window.innerHeight * dpr;
+  canvas.style.width = `${window.innerWidth}px`;
+  canvas.style.height = `${window.innerHeight}px`;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   const colors = ['#2563eb', '#16a34a', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
   const particles = Array.from({ length: 110 }, () => ({
@@ -315,8 +309,10 @@ function fireConfetti() {
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
-  const [classFilter, setClassFilter] = useState<ClassFilter>('전체');
+  const [classFilter, setClassFilter] = useState<ClassFilter>('1-1');
   const [levelFilter, setLevelFilter] = useState<number | null>(null);
+
+  // v3에서는 키를 새로 사용하므로 기존 예시/테스트 데이터가 자동으로 섞이지 않습니다.
   const [students, setStudents] = useState<StudentState[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
@@ -325,14 +321,22 @@ function App() {
         const stateMap = new Map(parsed.map((s) => [s.id, s]));
         return ROSTER.map((base) => {
           const old = stateMap.get(base.id);
-          return old ? { ...base, completed: old.completed ?? [], mentorPoints: old.mentorPoints ?? 0 } : { ...base, completed: [], mentorPoints: 0 };
+          const limit = CLASS_SESSION_LIMIT[base.className];
+          return old
+            ? {
+                ...base,
+                completed: (old.completed ?? []).filter((n) => n >= 1 && n <= limit),
+                mentorPoints: old.mentorPoints ?? 0,
+              }
+            : { ...base, completed: [], mentorPoints: 0 };
         });
       }
     } catch {
-      // ignore broken local data
+      // 손상된 로컬 데이터는 무시
     }
     return initialStudents();
   });
+
   const [mentorLogs, setMentorLogs] = useState<MentorLog[]>(() => {
     try {
       const saved = localStorage.getItem(LOG_KEY);
@@ -341,6 +345,7 @@ function App() {
       return [];
     }
   });
+
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
   const [mentorModalOpen, setMentorModalOpen] = useState(false);
   const [mentorId, setMentorId] = useState('');
@@ -367,31 +372,56 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const filteredStudents = useMemo(() => {
-    const byClass = classFilter === '전체' ? students : students.filter((s) => s.className === classFilter);
-    if (levelFilter === null) return byClass;
-    return byClass.filter((s) => getLevel(s.completed.length).level === levelFilter);
-  }, [students, classFilter, levelFilter]);
-
   const classOnlyStudents = useMemo(
     () => classFilter === '전체' ? students : students.filter((s) => s.className === classFilter),
     [students, classFilter],
   );
 
+  const filteredStudents = useMemo(() => {
+    if (levelFilter === null) return classOnlyStudents;
+    return classOnlyStudents.filter((s) => getLevel(s).level === levelFilter);
+  }, [classOnlyStudents, levelFilter]);
+
+  const displaySessions = useMemo(() => {
+    if (classFilter === '전체') return Array.from({ length: 32 }, (_, i) => i + 1);
+    return sessionsForClass(classFilter);
+  }, [classFilter]);
+
   const totalSubmissions = classOnlyStudents.reduce((sum, s) => sum + s.completed.length, 0);
   const participating = classOnlyStudents.filter((s) => s.completed.length > 0).length;
   const totalMentorPoints = classOnlyStudents.reduce((sum, s) => sum + s.mentorPoints, 0);
 
-  const sessionCounts = useMemo(
-    () => SESSIONS.map((session) => classOnlyStudents.filter((s) => s.completed.includes(session)).length),
-    [classOnlyStudents],
-  );
+  const progressValue = useMemo(() => {
+    if (classFilter !== '전체') {
+      const maxDone = classOnlyStudents.reduce((max, s) => Math.max(max, s.completed.length), 0);
+      return `${maxDone}/${CLASS_SESSION_LIMIT[classFilter]}차시`;
+    }
+
+    const classes32: ClassName[] = ['1-1', '1-2', '1-4', '1-5'];
+    const classes16: ClassName[] = ['1-3', '1-6', '1-7'];
+    const max32 = students
+      .filter((s) => classes32.includes(s.className))
+      .reduce((max, s) => Math.max(max, s.completed.length), 0);
+    const max16 = students
+      .filter((s) => classes16.includes(s.className))
+      .reduce((max, s) => Math.max(max, s.completed.length), 0);
+    return `${max32}/32 · ${max16}/16`;
+  }, [students, classFilter, classOnlyStudents]);
+
+  const progressLabel = classFilter === '전체' ? '진행 차시 (주2회 · 주1회)' : '진행 차시';
+
+  const sessionStats = useMemo(() => {
+    return displaySessions.map((session) => {
+      const eligible = classOnlyStudents.filter((s) => session <= CLASS_SESSION_LIMIT[s.className]);
+      const submitted = eligible.filter((s) => s.completed.includes(session)).length;
+      const pct = eligible.length ? Math.round((submitted / eligible.length) * 100) : 0;
+      return { session, submitted, eligible: eligible.length, pct };
+    });
+  }, [classOnlyStudents, displaySessions]);
 
   const levelCounts = useMemo(() => {
     const counts = [0, 0, 0, 0, 0];
-    classOnlyStudents.forEach((s) => {
-      counts[getLevel(s.completed.length).level - 1] += 1;
-    });
+    classOnlyStudents.forEach((s) => counts[getLevel(s).level - 1] += 1);
     return counts;
   }, [classOnlyStudents]);
 
@@ -399,12 +429,15 @@ function App() {
     setStudents((prev) => {
       const target = prev.find((s) => s.id === studentId);
       if (!target) return prev;
+      if (session > CLASS_SESSION_LIMIT[target.className]) return prev;
+
       const wasDone = target.completed.includes(session);
-      const beforeLevel = getLevel(target.completed.length).level;
+      const beforeLevel = getLevel(target).level;
       const nextCompleted = wasDone
         ? target.completed.filter((n) => n !== session)
         : [...target.completed, session].sort((a, b) => a - b);
-      const afterLevel = getLevel(nextCompleted.length).level;
+      const afterState = { ...target, completed: nextCompleted };
+      const afterLevel = getLevel(afterState).level;
 
       if (!wasDone && afterLevel > beforeLevel) {
         window.setTimeout(() => {
@@ -421,7 +454,7 @@ function App() {
         });
       }
 
-      return prev.map((s) => s.id === studentId ? { ...s, completed: nextCompleted } : s);
+      return prev.map((s) => s.id === studentId ? afterState : s);
     });
   };
 
@@ -462,7 +495,7 @@ function App() {
     demoTimer.current = window.setInterval(() => {
       const pending: Array<{ studentId: string; session: number }> = [];
       students.forEach((student) => {
-        SESSIONS.forEach((session) => {
+        sessionsForClass(student.className).forEach((session) => {
           if (!student.completed.includes(session)) pending.push({ studentId: student.id, session });
         });
       });
@@ -472,46 +505,52 @@ function App() {
         toggleSubmission(pick.studentId, pick.session, true);
       }
 
-      if (Math.random() < 0.38 && students.length > 1) {
+      if (Math.random() < 0.32 && students.length > 1) {
         const mentor = students[Math.floor(Math.random() * students.length)];
         let mentee = students[Math.floor(Math.random() * students.length)];
         while (mentee.id === mentor.id) mentee = students[Math.floor(Math.random() * students.length)];
         giveMentorPoints(mentor.id, mentee.id, 1, true);
       }
-    }, 1200);
+    }, 1300);
 
     return () => {
       if (demoTimer.current) window.clearInterval(demoTimer.current);
       demoTimer.current = null;
     };
-  // demo simulation intentionally uses current snapshot and is refreshed when state changes
   }, [demoOn, students]);
 
   const selectedStudent = selectedStudentId ? students.find((s) => s.id === selectedStudentId) ?? null : null;
 
   const resetData = () => {
-    if (!window.confirm('제출 현황과 멘토 포인트를 모두 0으로 초기화할까요?')) return;
+    if (!window.confirm('모든 반의 제출 현황과 멘토 포인트를 0으로 초기화할까요?')) return;
     setStudents(initialStudents());
     setMentorLogs([]);
     setLevelFilter(null);
-    setToast({ kind: 'info', message: '대시보드 데이터를 초기화했습니다.' });
+    setToast({ kind: 'info', message: '모든 수업 데이터를 초기화했습니다.' });
   };
 
   const downloadCsv = () => {
     const targets = classOnlyStudents;
-    const header = ['반', '학번', '이름', '레벨', '멘토포인트', ...SESSIONS.map((n) => `${n}차시`), '제출합계'];
+    const csvSessions = classFilter === '전체'
+      ? Array.from({ length: 32 }, (_, i) => i + 1)
+      : sessionsForClass(classFilter);
+
+    const header = ['반', '학번', '이름', '총차시', '레벨', '멘토포인트', ...csvSessions.map((n) => `${n}차시`), '제출합계'];
     const rows = targets.map((student) => {
-      const level = getLevel(student.completed.length);
+      const level = getLevel(student);
+      const maxSession = CLASS_SESSION_LIMIT[student.className];
       return [
         student.className,
         student.id,
         student.name,
+        maxSession,
         `Lv.${level.level}`,
         student.mentorPoints,
-        ...SESSIONS.map((session) => student.completed.includes(session) ? '제출' : '미제출'),
+        ...csvSessions.map((session) => session > maxSession ? '해당없음' : student.completed.includes(session) ? '제출' : '미제출'),
         student.completed.length,
       ];
     });
+
     const csv = '\ufeff' + [header, ...rows]
       .map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(','))
       .join('\n');
@@ -519,7 +558,7 @@ function App() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `${classFilter === '전체' ? '1학년_전체' : classFilter}_수학_RPG_제출현황.csv`;
+    link.download = `${classFilter === '전체' ? '1학년_전체' : classFilter}_공통수학2_제출현황.csv`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -528,7 +567,7 @@ function App() {
     <div className="dashboard-app">
       <header className="dashboard-header">
         <div className="brand-block">
-          <h1>🎮 수학 학습 RPG 대시보드</h1>
+          <h1>🎮 공통수학2 학습 RPG 대시보드</h1>
           <span>2026학년도 1학년 · 1반~7반</span>
         </div>
         <div className="header-actions">
@@ -542,27 +581,38 @@ function App() {
 
       <main className="dashboard-main">
         <div className="control-row">
-          <div className="class-pills" aria-label="반 선택">
-            {CLASS_NAMES.map((name) => (
-              <button
-                key={name}
-                className={classFilter === name ? 'active' : ''}
-                onClick={() => {
-                  setClassFilter(name);
-                  setLevelFilter(null);
-                }}
-              >
-                {name === '전체' ? '전체' : `${name}반`}
-              </button>
-            ))}
+          <div className="class-pills" aria-label="학급 선택">
+            <button
+              className={classFilter === '전체' ? 'active' : ''}
+              onClick={() => { setClassFilter('전체'); setLevelFilter(null); }}
+            >
+              전체 ({students.length}명)
+            </button>
+            {CLASS_NAMES.map((name) => {
+              const classNo = name.split('-')[1];
+              return (
+                <button
+                  key={name}
+                  className={classFilter === name ? 'active' : ''}
+                  onClick={() => { setClassFilter(name); setLevelFilter(null); }}
+                >
+                  1학년 {classNo}반 ({classStudentCount(name)}명)
+                </button>
+              );
+            })}
           </div>
-          <div className="roster-count">명렬 적용 학생 <b>{classOnlyStudents.length}명</b> / 전체 {students.length}명</div>
+          <div className="roster-count">
+            {classFilter === '전체'
+              ? <>총 <b>{students.length}명</b> · 32차시반 4개 / 16차시반 3개</>
+              : <><b>{CLASS_SESSION_LIMIT[classFilter]}차시</b> 운영 · {classStudentCount(classFilter)}명</>
+            }
+          </div>
         </div>
 
         <div className="summary-grid">
           <StatCard value={totalSubmissions.toLocaleString()} label="총 제출 수" />
           <StatCard value={`${participating}/${classOnlyStudents.length}명`} label="참여 학생" />
-          <StatCard value="18/18차시" label="관리 차시" />
+          <StatCard value={progressValue} label={progressLabel} />
           <StatCard value={`${totalMentorPoints}pt`} label="멘토 포인트" />
         </div>
 
@@ -578,7 +628,8 @@ function App() {
             students={filteredStudents}
             classStudents={classOnlyStudents}
             classFilter={classFilter}
-            sessionCounts={sessionCounts}
+            displaySessions={displaySessions}
+            sessionStats={sessionStats}
             levelCounts={levelCounts}
             levelFilter={levelFilter}
             setLevelFilter={setLevelFilter}
@@ -653,32 +704,34 @@ function StatCard({ value, label }: { value: string; label: string }) {
   );
 }
 
-type OverviewProps = {
-  students: StudentState[];
-  classStudents: StudentState[];
-  classFilter: ClassFilter;
-  sessionCounts: number[];
-  levelCounts: number[];
-  levelFilter: number | null;
-  setLevelFilter: (level: number | null) => void;
-  toggleSubmission: (studentId: string, session: number) => void;
-  downloadCsv: () => void;
-};
-
 function Overview({
   students,
   classStudents,
   classFilter,
-  sessionCounts,
+  displaySessions,
+  sessionStats,
   levelCounts,
   levelFilter,
   setLevelFilter,
   toggleSubmission,
   downloadCsv,
-}: OverviewProps) {
-  const maxStudents = Math.max(1, classStudents.length);
+}: {
+  students: StudentState[];
+  classStudents: StudentState[];
+  classFilter: ClassFilter;
+  displaySessions: number[];
+  sessionStats: Array<{session:number; submitted:number; eligible:number; pct:number}>;
+  levelCounts: number[];
+  levelFilter: number | null;
+  setLevelFilter: (level: number | null) => void;
+  toggleSubmission: (studentId: string, session: number) => void;
+  downloadCsv: () => void;
+}) {
   const missing = useMemo(() => classStudents
-    .map((student) => ({ ...student, missing: SESSIONS.filter((s) => !student.completed.includes(s)) }))
+    .map((student) => {
+      const allowed = sessionsForClass(student.className);
+      return { ...student, missing: allowed.filter((s) => !student.completed.includes(s)) };
+    })
     .filter((student) => student.missing.length > 0)
     .sort((a, b) => a.missing.length - b.missing.length || a.className.localeCompare(b.className) || a.id.localeCompare(b.id)),
   [classStudents]);
@@ -688,27 +741,30 @@ function Overview({
       <div className="section-heading">
         <div>
           <h2>차시별 제출 현황</h2>
-          <p>{classFilter === '전체' ? '1학년 전체' : `${classFilter}반`} · 차시별 완료 학생 수와 달성률</p>
+          <p>
+            {classFilter === '전체'
+              ? '전체 보기 · 1·2·4·5반 32차시 / 3·6·7반 16차시'
+              : `${classFilter}반 · 총 ${CLASS_SESSION_LIMIT[classFilter]}차시`
+            }
+          </p>
         </div>
         <button className="download-btn" onClick={downloadCsv}>📥 CSV 다운로드</button>
       </div>
 
-      <div className="chart-card vertical-chart">
+      <div className={`chart-card vertical-chart ${displaySessions.length > 20 ? 'many-bars' : ''}`}>
         <div className="y-axis">
           {[100, 80, 60, 40, 20, 0].map((n) => <span key={n}>{n}%</span>)}
         </div>
-        <div className="bars-wrap">
-          {SESSIONS.map((session, index) => {
-            const count = sessionCounts[index];
-            const pct = Math.round((count / maxStudents) * 100);
-            return (
-              <div className="bar-item" key={session}>
-                <div className="bar-tooltip">{count}명 · {pct}%</div>
-                <div className="bar-column" style={{ height: `${pct}%` }} />
-                <span>{session}차시</span>
+        <div className="bars-scroller">
+          <div className="bars-wrap">
+            {sessionStats.map((stat) => (
+              <div className="bar-item" key={stat.session}>
+                <div className="bar-tooltip">{stat.submitted}/{stat.eligible}명 · {stat.pct}%</div>
+                <div className="bar-column" style={{ height: `${stat.pct}%` }} />
+                <span>{stat.session}차시</span>
               </div>
-            );
-          })}
+            ))}
+          </div>
         </div>
       </div>
 
@@ -732,10 +788,12 @@ function Overview({
 
       <div className="missing-card">
         <h2>⚠️ 미제출 상세</h2>
-        <p className="card-help">빨간 차시 칩을 누르면 즉시 제출 완료로 바뀝니다.</p>
+        <p className="card-help">
+          각 반의 실제 운영 차시까지만 표시합니다. 빨간 차시 칩을 누르면 제출 완료로 변경됩니다.
+        </p>
         <div className="missing-list">
           {missing.length === 0 ? (
-            <div className="empty-state">🎉 현재 선택된 반은 모든 차시를 제출했습니다.</div>
+            <div className="empty-state">🎉 현재 선택된 학생들은 해당 차시를 모두 제출했습니다.</div>
           ) : missing.map((student) => (
             <div className="missing-row" key={student.id}>
               <div className="missing-name">
@@ -753,16 +811,22 @@ function Overview({
         </div>
       </div>
 
-      <SubmissionTable students={students} toggleSubmission={toggleSubmission} />
+      <SubmissionTable
+        students={students}
+        displaySessions={displaySessions}
+        toggleSubmission={toggleSubmission}
+      />
     </section>
   );
 }
 
 function SubmissionTable({
   students,
+  displaySessions,
   toggleSubmission,
 }: {
   students: StudentState[];
+  displaySessions: number[];
   toggleSubmission: (studentId: string, session: number) => void;
 }) {
   const sorted = [...students].sort((a, b) => a.className.localeCompare(b.className) || a.id.localeCompare(b.id));
@@ -771,7 +835,7 @@ function SubmissionTable({
     <div className="table-card">
       <div className="table-title">
         <h2>📋 실시간 제출 체크 표</h2>
-        <span>✅ / ❌ 버튼을 눌러 즉시 변경</span>
+        <span>반별 운영 차시에 맞춰 ✅ / ❌ 버튼으로 변경</span>
       </div>
       <div className="table-scroll">
         <table>
@@ -780,22 +844,28 @@ function SubmissionTable({
               <th>반</th>
               <th>학번</th>
               <th>이름</th>
+              <th>총차시</th>
               <th>레벨</th>
               <th>제출 수</th>
-              {SESSIONS.map((s) => <th key={s}>{s}차시</th>)}
+              {displaySessions.map((s) => <th key={s}>{s}차시</th>)}
             </tr>
           </thead>
           <tbody>
             {sorted.map((student) => {
-              const meta = getLevel(student.completed.length);
+              const meta = getLevel(student);
+              const limit = CLASS_SESSION_LIMIT[student.className];
               return (
                 <tr key={student.id}>
                   <td>{student.className}</td>
                   <td>{student.id}</td>
                   <td className="name-cell">{student.name}</td>
+                  <td>{limit}</td>
                   <td><span className={`mini-level mini-${meta.level}`}>Lv.{meta.level} {meta.emoji}</span></td>
-                  <td><b>{student.completed.length}/18</b></td>
-                  {SESSIONS.map((session) => {
+                  <td><b>{student.completed.length}/{limit}</b></td>
+                  {displaySessions.map((session) => {
+                    if (session > limit) {
+                      return <td key={session}><span className="not-applicable">—</span></td>;
+                    }
                     const done = student.completed.includes(session);
                     return (
                       <td key={session}>
@@ -833,20 +903,22 @@ function Levels({
   setLevelFilter: (level: number | null) => void;
 }) {
   const sorted = [...students].sort((a, b) =>
+    (b.completed.length / CLASS_SESSION_LIMIT[b.className]) - (a.completed.length / CLASS_SESSION_LIMIT[a.className]) ||
     b.completed.length - a.completed.length ||
     b.mentorPoints - a.mentorPoints ||
     a.className.localeCompare(b.className) ||
     a.id.localeCompare(b.id),
   );
 
-  const counts = LEVELS.map((level) => sorted.filter((s) => getLevel(s.completed.length).level === level.level).length);
+  const counts = LEVELS.map((level) => sorted.filter((s) => getLevel(s).level === level.level).length);
+  const hasLearningData = sorted.some((s) => s.completed.length > 0);
 
   return (
     <section className="content-section">
       <div className="section-heading">
         <div>
           <h2>👤 개인별 레벨 및 경험치</h2>
-          <p>학생 카드를 클릭하면 차시별 체크리스트와 멘토링 내역을 확인할 수 있습니다.</p>
+          <p>32차시반과 16차시반을 공정하게 비교하기 위해 제출률 기준으로 레벨이 계산됩니다.</p>
         </div>
       </div>
 
@@ -865,24 +937,25 @@ function Levels({
 
       <div className="level-grid">
         {sorted.map((student, index) => {
-          const meta = getLevel(student.completed.length);
+          const meta = getLevel(student);
+          const total = CLASS_SESSION_LIMIT[student.className];
           const percent = Math.min(100, (meta.xp / meta.maxXp) * 100);
           const helpCount = mentorLogs.filter((log) => log.mentorId === student.id).length;
           return (
             <button className={`level-card level-${meta.level}`} key={student.id} onClick={() => onOpen(student.id)}>
               <div className="level-top">
                 <div className="student-name">
-                  <span className="rank-num">{index < 3 ? ['🥇', '🥈', '🥉'][index] : `${index + 1}위`}</span>
+                  <span className="rank-num">{!hasLearningData ? '–' : index < 3 ? ['🥇', '🥈', '🥉'][index] : `${index + 1}위`}</span>
                   <span>{meta.emoji}</span>
                   <strong>{student.name}</strong>
                 </div>
                 <span className="level-pill">Lv.{meta.level}</span>
               </div>
-              <p>{student.className} · {student.id} · {meta.title} · {student.completed.length}/18 차시 완료</p>
+              <p>{student.className} · {student.id} · {meta.title} · {student.completed.length}/{total} 차시 완료</p>
               <div className="xp-track"><span style={{ width: `${percent}%` }} /></div>
               <div className="xp-meta">
                 <span>{meta.xp}/{meta.maxXp} XP</span>
-                <span>{meta.level === 5 && student.completed.length === 18 ? '✨ 완전 정복!' : `다음 단계까지 ${Math.max(0, meta.next - student.completed.length)}회`}</span>
+                <span>{student.completed.length === total ? '✨ 완전 정복!' : `다음 레벨까지 ${Math.max(0, meta.next - student.completed.length)}회`}</span>
               </div>
               <div className="mentor-mini">👑 멘토 {student.mentorPoints}pt · 도움 {helpCount}회</div>
             </button>
@@ -906,10 +979,9 @@ function Mentors({
 }) {
   const ranked = [...students]
     .filter((s) => s.mentorPoints > 0)
-    .sort((a, b) => b.mentorPoints - a.mentorPoints || b.completed.length - a.completed.length || a.id.localeCompare(b.id));
-  const visible = ranked.length > 0 ? ranked.slice(0, 20) : [...students].slice(0, 10);
+    .sort((a, b) => b.mentorPoints - a.mentorPoints || a.className.localeCompare(b.className) || a.id.localeCompare(b.id));
+  const visible = ranked.slice(0, 20);
   const max = Math.max(18, ...visible.map((s) => s.mentorPoints));
-
   const studentMap = new Map(allStudents.map((s) => [s.id, s]));
 
   return (
@@ -917,7 +989,7 @@ function Mentors({
       <div className="section-heading">
         <div>
           <h2>👑 멘토 포인트 랭킹</h2>
-          <p>친구를 도와 문제 해결을 지원한 학생에게 포인트를 지급합니다.</p>
+          <p>초기 상태는 모두 0pt입니다. 수업 중 친구를 도운 학생에게 포인트를 지급합니다.</p>
         </div>
         <button className="primary-btn" onClick={onOpenGive}>＋ 멘토 포인트 주기</button>
       </div>
@@ -925,7 +997,9 @@ function Mentors({
       <div className="mentor-layout">
         <div className="mentor-list-card">
           <h3>랭킹 리스트</h3>
-          {visible.map((mentor, index) => (
+          {visible.length === 0 ? (
+            <div className="empty-state">아직 멘토 포인트가 없습니다. 수업이 시작되면 랭킹이 표시됩니다.</div>
+          ) : visible.map((mentor, index) => (
             <div className="mentor-row" key={mentor.id}>
               <div className="mentor-rank">{index < 3 ? ['🥇', '🥈', '🥉'][index] : `${index + 1}위`}</div>
               <div className="mentor-person">
@@ -947,7 +1021,7 @@ function Mentors({
               <b>{mentor.mentorPoints}</b>
             </div>
           ))}
-          {visible.every((s) => s.mentorPoints === 0) && (
+          {visible.length === 0 && (
             <div className="chart-empty">포인트를 지급하면 그래프가 채워집니다.</div>
           )}
         </div>
@@ -978,43 +1052,51 @@ function Mentors({
 }
 
 function ClassQuest({ students }: { students: StudentState[] }) {
-  const stats = CLASS_NAMES.filter((c): c is Exclude<ClassFilter, '전체'> => c !== '전체').map((className) => {
+  const hasClassActivity = students.some((s) => s.completed.length > 0);
+
+  const stats = CLASS_NAMES.map((className) => {
     const list = students.filter((s) => s.className === className);
+    const maxSessions = CLASS_SESSION_LIMIT[className];
     const total = list.reduce((sum, s) => sum + s.completed.length, 0);
-    const possible = list.length * 18;
+    const possible = list.length * maxSessions;
     const rate = possible ? (total / possible) * 100 : 0;
     const avg = list.length ? total / list.length : 0;
-    const avgLevel = list.length ? list.reduce((sum, s) => sum + getLevel(s.completed.length).level, 0) / list.length : 0;
-    const levelDist = LEVELS.map((level) => list.filter((s) => getLevel(s.completed.length).level === level.level).length);
+    const avgLevel = list.length ? list.reduce((sum, s) => sum + getLevel(s).level, 0) / list.length : 0;
+    const levelDist = LEVELS.map((level) => list.filter((s) => getLevel(s).level === level.level).length);
     const zeroStudents = list.filter((s) => s.completed.length === 0);
-    return { className, list, total, rate, avg, avgLevel, levelDist, zeroStudents };
-  }).sort((a, b) => b.rate - a.rate || b.total - a.total);
+    const progress = list.reduce((max, s) => Math.max(max, s.completed.length), 0);
+    return { className, list, maxSessions, progress, total, rate, avg, avgLevel, levelDist, zeroStudents };
+  }).sort((a, b) => b.rate - a.rate || b.total - a.total || a.className.localeCompare(b.className));
 
   return (
     <section className="content-section">
       <div className="section-heading">
         <div>
           <h2>🏰 반별 퀘스트 대항전</h2>
-          <p>1학년 1반부터 7반까지 제출률·제출 건수·평균 레벨을 비교합니다.</p>
+          <p>반마다 실제 수업 차시가 다르므로 제출률 기준으로 비교합니다.</p>
         </div>
       </div>
 
-      <div className="quest-podium">
-        {stats.slice(0, 3).map((stat, index) => (
-          <div className={`podium-card podium-${index + 1}`} key={stat.className}>
-            <span>{['🥇', '🥈', '🥉'][index]}</span>
-            <strong>{stat.className}반</strong>
-            <b>{stat.rate.toFixed(1)}%</b>
-          </div>
-        ))}
-      </div>
+      {hasClassActivity ? (
+        <div className="quest-podium">
+          {stats.slice(0, 3).map((stat, index) => (
+            <div className={`podium-card podium-${index + 1}`} key={stat.className}>
+              <span>{['🥇', '🥈', '🥉'][index]}</span>
+              <strong>{stat.className}반</strong>
+              <b>{stat.rate.toFixed(1)}%</b>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="preclass-banner">📘 아직 수업 전입니다. 첫 제출이 생기면 반별 순위가 자동으로 시작됩니다.</div>
+      )}
 
       <div className="quest-grid">
         {stats.map((stat, rank) => (
           <article className="quest-card" key={stat.className}>
             <div className="quest-title">
               <div>
-                <span className="quest-rank">{rank + 1}위</span>
+                <span className="quest-rank">{hasClassActivity ? `${rank + 1}위` : '수업 전'}</span>
                 <h3>{stat.className}반</h3>
               </div>
               <strong>{stat.rate.toFixed(1)}%</strong>
@@ -1022,10 +1104,10 @@ function ClassQuest({ students }: { students: StudentState[] }) {
             <div className="quest-progress"><span style={{ width: `${stat.rate}%` }} /></div>
 
             <div className="quest-metrics">
+              <div><span>진행 차시</span><b>{stat.progress}/{stat.maxSessions}</b></div>
               <div><span>제출 건수</span><b>{stat.total}</b></div>
               <div><span>인당 평균</span><b>{stat.avg.toFixed(1)}</b></div>
               <div><span>평균 레벨</span><b>Lv.{stat.avgLevel.toFixed(2)}</b></div>
-              <div><span>학생 수</span><b>{stat.list.length}명</b></div>
             </div>
 
             <div className="quest-levels">
@@ -1064,9 +1146,10 @@ function StudentModal({
   toggleSubmission: (studentId: string, session: number) => void;
   onClose: () => void;
 }) {
-  const meta = getLevel(student.completed.length);
+  const meta = getLevel(student);
   const map = new Map(students.map((s) => [s.id, s]));
   const logs = mentorLogs.filter((log) => log.mentorId === student.id || log.menteeId === student.id).slice(0, 10);
+  const sessions = sessionsForClass(student.className);
 
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
@@ -1076,14 +1159,14 @@ function StudentModal({
           <span className="modal-avatar">{meta.emoji}</span>
           <div>
             <h2>{student.name}</h2>
-            <p>{student.className} · {student.id} · {meta.title}</p>
+            <p>{student.className} · {student.id} · 총 {CLASS_SESSION_LIMIT[student.className]}차시 · {meta.title}</p>
           </div>
           <span className={`level-pill modal-level level-${meta.level}`}>Lv.{meta.level}</span>
         </div>
 
         <h3>차시별 체크리스트</h3>
         <div className="session-check-grid">
-          {SESSIONS.map((session) => {
+          {sessions.map((session) => {
             const done = student.completed.includes(session);
             return (
               <button className={done ? 'done' : 'miss'} key={session} onClick={() => toggleSubmission(student.id, session)}>

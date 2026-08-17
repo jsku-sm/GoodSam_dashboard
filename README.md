@@ -1,20 +1,47 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Good쌤 공통수학2 학습 RPG 대시보드 — 1학년 1~7반
 
-# Run and deploy your AI Studio app
+## 명렬 반영
+첨부된 2026학년도 1학년 명렬표 기준입니다.
 
-This contains everything you need to run your app locally.
+- 1-1: 18명
+- 1-2: 20명
+- 1-3: 20명
+- 1-4: 20명
+- 1-5: 20명
+- 1-6: 20명
+- 1-7: 19명
+- 전체: 137명
 
-View your app in AI Studio: https://ai.studio/apps/54bf1802-4850-4b43-9601-09e374e46a65
+이름이 비어 있는 번호는 학생으로 등록하지 않았습니다.
 
-## Run Locally
+## 반별 운영 차시
+- 1-1, 1-2, 1-4, 1-5: 주 2회 × 16주 = 32차시
+- 1-3, 1-6, 1-7: 주 1회 × 16주 = 16차시
 
-**Prerequisites:**  Node.js
+단원명은 아직 넣지 않았고 `1차시`, `2차시`처럼 차시만 표시합니다.
 
+## 초기 상태
+- 총 제출 수: 0
+- 참여 학생: 0
+- 멘토 포인트: 0
+- 진행 차시:
+  - 32차시반: 0/32
+  - 16차시반: 0/16
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+각 학급을 선택했을 때 진행 차시는 **그 학급에서 가장 많이 제출한 학생의 제출 개수**로 자동 계산됩니다.
+
+## 레벨 계산
+32차시반과 16차시반을 같은 기준으로 비교할 수 있도록 제출 개수 자체가 아니라 제출률을 기준으로 5단계를 계산합니다.
+
+- Lv.1: 0~20% 미만
+- Lv.2: 20~40% 미만
+- Lv.3: 40~60% 미만
+- Lv.4: 60~80% 미만
+- Lv.5: 80~100%
+
+## 저장 방식
+현재 제출/멘토 데이터는 브라우저의 localStorage에 저장됩니다.
+이번 버전은 새 저장 키를 사용해 이전 테스트/예시 데이터가 섞이지 않도록 초기화했습니다.
+
+## GitHub Pages
+`.github/workflows/deploy-pages.yml`을 그대로 유지하면 됩니다.
