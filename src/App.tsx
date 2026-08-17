@@ -18,8 +18,19 @@ type StudentState = StudentBase & {
 type MentorLog = {
   id: string;
   mentorId: string;
-  menteeId: string;
+  menteeId?: string;
+  session?: number;
   points: number;
+  memo?: string;
+  at: string;
+};
+
+type SubmissionLog = {
+  id: string;
+  studentId: string;
+  session: number;
+  mentorId?: string;
+  memo?: string;
   at: string;
 };
 
@@ -29,8 +40,9 @@ type ToastState = {
 } | null;
 
 const CLASS_NAMES: ClassName[] = ['1-1', '1-2', '1-3', '1-4', '1-5', '1-6', '1-7'];
-const STORAGE_KEY = 'goodssam-rpg-v3-reset-students';
-const LOG_KEY = 'goodssam-rpg-v3-reset-mentor-logs';
+const STORAGE_KEY = 'goodssam-rpg-v4-students';
+const LOG_KEY = 'goodssam-rpg-v4-mentor-logs';
+const SUBMISSION_LOG_KEY = 'goodssam-rpg-v4-submission-logs';
 
 // 1,2,4,5반: 주 2회 × 16주 = 32차시
 // 3,6,7반: 주 1회 × 16주 = 16차시
@@ -346,11 +358,19 @@ function App() {
     }
   });
 
+  const [submissionLogs, setSubmissionLogs] = useState<SubmissionLog[]>(() => {
+    try {
+      const saved = localStorage.getItem(SUBMISSION_LOG_KEY);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [submissionModalOpen, setSubmissionModalOpen] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
   const [mentorModalOpen, setMentorModalOpen] = useState(false);
-  const [mentorId, setMentorId] = useState('');
-  const [menteeId, setMenteeId] = useState('');
-  const [mentorPointValue, setMentorPointValue] = useState(1);
   const [demoOn, setDemoOn] = useState(false);
   const [toast, setToast] = useState<ToastState>(null);
   const [updatedAt, setUpdatedAt] = useState(new Date());
@@ -365,6 +385,11 @@ function App() {
     localStorage.setItem(LOG_KEY, JSON.stringify(mentorLogs));
     setUpdatedAt(new Date());
   }, [mentorLogs]);
+
+  useEffect(() => {
+    localStorage.setItem(SUBMISSION_LOG_KEY, JSON.stringify(submissionLogs));
+    setUpdatedAt(new Date());
+  }, [submissionLogs]);
 
   useEffect(() => {
     if (!toast) return;
@@ -458,31 +483,152 @@ function App() {
     });
   };
 
-  const giveMentorPoints = (mentor: string, mentee: string, points: number, silent = false) => {
-    if (!mentor || !mentee || mentor === mentee) {
-      if (!silent) setToast({ kind: 'info', message: '멘토와 멘티를 서로 다르게 선택해 주세요.' });
-      return;
+  const giveMentorPoints = (
+    mentor: string,
+    mentee: string | undefined,
+    points: number,
+    session?: number,
+    memo?: string,
+    silent = false,
+  ) => {
+    if (!mentor) {
+      if (!silent) setToast({ kind: 'info', message: '멘토 학생을 선택해 주세요.' });
+      return false;
     }
-    const mentorStudent = students.find((s) => s.id === mentor);
-    const menteeStudent = students.find((s) => s.id === mentee);
-    if (!mentorStudent || !menteeStudent) return;
+    if (mentee && mentor === mentee) {
+      if (!silent) setToast({ kind: 'info', message: '멘토와 멘티는 서로 다른 학생이어야 합니다.' });
+      return false;
+    }
 
-    setStudents((prev) => prev.map((s) => s.id === mentor ? { ...s, mentorPoints: s.mentorPoints + points } : s));
+    const mentorStudent = students.find((s) => s.id === mentor);
+    const menteeStudent = mentee ? students.find((s) => s.id === mentee) : undefined;
+    if (!mentorStudent) return false;
+
+    setStudents((prev) =>
+      prev.map((s) => s.id === mentor ? { ...s, mentorPoints: s.mentorPoints + points } : s)
+    );
+
     setMentorLogs((prev) => [{
       id: `${Date.now()}-${Math.random()}`,
       mentorId: mentor,
-      menteeId: mentee,
+      menteeId: mentee || undefined,
+      session,
       points,
+      memo: memo?.trim() || undefined,
       at: new Date().toISOString(),
-    }, ...prev].slice(0, 100));
+    }, ...prev].slice(0, 300));
 
     if (!silent) {
+      const menteeLabel = menteeStudent ? ` → ${menteeStudent.name}` : '';
+      const sessionLabel = session ? ` · ${session}차시` : '';
       setToast({
         kind: 'success',
-        message: `👑 ${mentorStudent.name} → ${menteeStudent.name} 도움 · +${points}pt`,
+        message: `👑 ${mentorStudent.name}${menteeLabel}${sessionLabel} · +${points}pt`,
       });
       setMentorModalOpen(false);
     }
+    return true;
+  };
+
+  const registerSubmission = (
+    studentId: string,
+    session: number,
+    mentorId?: string,
+    memo?: string,
+  ) => {
+    const target = students.find((s) => s.id === studentId);
+    if (!target) {
+      setToast({ kind: 'info', message: '제출 학생을 선택해 주세요.' });
+      return;
+    }
+    if (session < 1 || session > CLASS_SESSION_LIMIT[target.className]) {
+      setToast({ kind: 'info', message: '해당 학급에서 사용할 수 없는 차시입니다.' });
+      return;
+    }
+
+    const alreadyDone = target.completed.includes(session);
+
+    if (!alreadyDone) {
+      const beforeLevel = getLevel(target).level;
+      const nextCompleted = [...target.completed, session].sort((a, b) => a - b);
+      const afterState = { ...target, completed: nextCompleted };
+      const afterLevel = getLevel(afterState).level;
+
+      setStudents((prev) =>
+        prev.map((s) => s.id === studentId ? afterState : s)
+      );
+
+      if (afterLevel > beforeLevel) {
+        window.setTimeout(() => {
+          fireConfetti();
+          setToast({
+            kind: 'level',
+            message: `🎉 ${target.className} ${target.name} 학생이 Lv.${afterLevel}로 레벨업!`,
+          });
+        }, 30);
+      }
+
+      // 제출 등록과 동시에 또래 멘토를 지정하면 1pt 자동 지급
+      if (mentorId && mentorId !== studentId) {
+        giveMentorPoints(
+          mentorId,
+          studentId,
+          1,
+          session,
+          memo?.trim()
+            ? `학습지 제출 시 또래 멘토 지정 · ${memo.trim()}`
+            : '학습지 제출 시 또래 멘토 지정',
+          true,
+        );
+      }
+    }
+
+    // 같은 학생-차시는 최근 메모로 갱신합니다.
+    setSubmissionLogs((prev) => {
+      const withoutSame = prev.filter(
+        (log) => !(log.studentId === studentId && log.session === session)
+      );
+      return [{
+        id: `${Date.now()}-${Math.random()}`,
+        studentId,
+        session,
+        mentorId: mentorId || undefined,
+        memo: memo?.trim() || undefined,
+        at: new Date().toISOString(),
+      }, ...withoutSame].slice(0, 500);
+    });
+
+    setSubmissionModalOpen(false);
+    setToast({
+      kind: 'success',
+      message: alreadyDone
+        ? `📝 ${target.name} ${session}차시 기록을 저장했습니다.`
+        : `✅ ${target.name} ${session}차시 제출 등록 완료${mentorId ? ' · 멘토 +1pt' : ''}`,
+    });
+  };
+
+  const saveBackup = () => {
+    // 현재 상태는 평소에도 localStorage에 자동 저장되며, 이 버튼은 JSON 백업 파일도 만듭니다.
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(students));
+    localStorage.setItem(LOG_KEY, JSON.stringify(mentorLogs));
+    localStorage.setItem(SUBMISSION_LOG_KEY, JSON.stringify(submissionLogs));
+
+    const backup = {
+      savedAt: new Date().toISOString(),
+      students,
+      mentorLogs,
+      submissionLogs,
+    };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], {
+      type: 'application/json;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `GoodSam_수업대시보드_백업_${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setToast({ kind: 'success', message: '💾 현재 데이터 저장 및 백업 파일 생성 완료' });
   };
 
   useEffect(() => {
@@ -509,7 +655,7 @@ function App() {
         const mentor = students[Math.floor(Math.random() * students.length)];
         let mentee = students[Math.floor(Math.random() * students.length)];
         while (mentee.id === mentor.id) mentee = students[Math.floor(Math.random() * students.length)];
-        giveMentorPoints(mentor.id, mentee.id, 1, true);
+        giveMentorPoints(mentor.id, mentee.id, 1, undefined, '실시간 데모 멘토링', true);
       }
     }, 1300);
 
@@ -525,6 +671,7 @@ function App() {
     if (!window.confirm('모든 반의 제출 현황과 멘토 포인트를 0으로 초기화할까요?')) return;
     setStudents(initialStudents());
     setMentorLogs([]);
+    setSubmissionLogs([]);
     setLevelFilter(null);
     setToast({ kind: 'info', message: '모든 수업 데이터를 초기화했습니다.' });
   };
@@ -567,46 +714,70 @@ function App() {
     <div className="dashboard-app">
       <header className="dashboard-header">
         <div className="brand-block">
-          <h1>🎮 공통수학2 학습 RPG 대시보드</h1>
-          <span>2026학년도 1학년 · 1반~7반</span>
+          <h1>Good쌤 수업 대시보드</h1>
+          <span>수업 시간 실시간 학습지 제출 및 또래 멘토링 모니터링 시스템</span>
         </div>
+
         <div className="header-actions">
-          <button className={demoOn ? 'demo-btn on' : 'demo-btn'} onClick={() => setDemoOn((v) => !v)}>
-            ⚡ 실시간 데모 {demoOn ? 'ON' : 'OFF'}
+          <button className="top-action submit-action" onClick={() => setSubmissionModalOpen(true)}>
+            <span className="action-icon plus-icon">＋</span>
+            <span>제출 등록</span>
           </button>
-          <button className="reset-btn" onClick={resetData}>초기화</button>
-          <span className="updated-pill">◷ 마지막 갱신: {updatedAt.toLocaleTimeString('ko-KR')}</span>
+          <button
+            className="top-action mentor-action"
+            onClick={() => setMentorModalOpen(true)}
+          >
+            <span className="action-icon medal-icon">🏅</span>
+            <span>멘토 포인트</span>
+          </button>
+          <button className="top-action icon-action" onClick={saveBackup} title="저장 및 백업">
+            <span className="download-glyph">⇩</span>
+            <span className="compact-label">저장</span>
+          </button>
+          <button className="top-action icon-action" onClick={() => setSettingsModalOpen(true)} title="설정">
+            <span className="gear-glyph">⚙</span>
+            <span className="compact-label">설정</span>
+          </button>
         </div>
       </header>
 
       <main className="dashboard-main">
-        <div className="control-row">
-          <div className="class-pills" aria-label="학급 선택">
-            <button
-              className={classFilter === '전체' ? 'active' : ''}
-              onClick={() => { setClassFilter('전체'); setLevelFilter(null); }}
+        <div className="control-row dropdown-control-row">
+          <label className="class-select-box">
+            <span>학급 선택</span>
+            <select
+              value={classFilter}
+              onChange={(e) => {
+                setClassFilter(e.target.value as ClassFilter);
+                setLevelFilter(null);
+              }}
             >
-              전체 ({students.length}명)
-            </button>
-            {CLASS_NAMES.map((name) => {
-              const classNo = name.split('-')[1];
-              return (
-                <button
-                  key={name}
-                  className={classFilter === name ? 'active' : ''}
-                  onClick={() => { setClassFilter(name); setLevelFilter(null); }}
-                >
-                  1학년 {classNo}반 ({classStudentCount(name)}명)
-                </button>
-              );
-            })}
+              <option value="전체">전체 ({students.length}명)</option>
+              {CLASS_NAMES.map((name) => {
+                const classNo = name.split('-')[1];
+                return (
+                  <option key={name} value={name}>
+                    1학년 {classNo}반 ({classStudentCount(name)}명)
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+
+          <div className="class-context">
+            <b>
+              {classFilter === '전체'
+                ? `전체 ${students.length}명`
+                : `1학년 ${classFilter.split('-')[1]}반 (${classStudentCount(classFilter)}명)`}
+            </b>
+            <span>
+              {classFilter === '전체'
+                ? '1·2·4·5반 32차시 / 3·6·7반 16차시'
+                : `${CLASS_SESSION_LIMIT[classFilter]}차시 운영`}
+            </span>
           </div>
-          <div className="roster-count">
-            {classFilter === '전체'
-              ? <>총 <b>{students.length}명</b> · 32차시반 4개 / 16차시반 3개</>
-              : <><b>{CLASS_SESSION_LIMIT[classFilter]}차시</b> 운영 · {classStudentCount(classFilter)}명</>
-            }
-          </div>
+
+          <div className="updated-inline">◷ 마지막 갱신 {updatedAt.toLocaleTimeString('ko-KR')}</div>
         </div>
 
         <div className="summary-grid">
@@ -653,13 +824,7 @@ function App() {
             students={classOnlyStudents}
             allStudents={students}
             logs={mentorLogs}
-            onOpenGive={() => {
-              const first = classOnlyStudents[0]?.id ?? students[0]?.id ?? '';
-              setMentorId(first);
-              setMenteeId(classOnlyStudents[1]?.id ?? students[1]?.id ?? '');
-              setMentorPointValue(1);
-              setMentorModalOpen(true);
-            }}
+            onOpenGive={() => setMentorModalOpen(true)}
           />
         )}
 
@@ -676,17 +841,33 @@ function App() {
         />
       )}
 
-      {mentorModalOpen && (
-        <MentorModal
+      {submissionModalOpen && (
+        <SubmissionModal
           students={students}
-          mentorId={mentorId}
-          menteeId={menteeId}
-          points={mentorPointValue}
-          setMentorId={setMentorId}
-          setMenteeId={setMenteeId}
-          setPoints={setMentorPointValue}
-          onGive={() => giveMentorPoints(mentorId, menteeId, mentorPointValue)}
+          classFilter={classFilter}
+          submissionLogs={submissionLogs}
+          onRegister={registerSubmission}
+          onClose={() => setSubmissionModalOpen(false)}
+        />
+      )}
+
+      {mentorModalOpen && (
+        <MentorPointModal
+          students={students}
+          classFilter={classFilter}
+          onGive={(mentor, mentee, session, points, memo) =>
+            giveMentorPoints(mentor, mentee, points, session, memo)
+          }
           onClose={() => setMentorModalOpen(false)}
+        />
+      )}
+
+      {settingsModalOpen && (
+        <SettingsModal
+          demoOn={demoOn}
+          setDemoOn={setDemoOn}
+          resetData={resetData}
+          onClose={() => setSettingsModalOpen(false)}
         />
       )}
 
@@ -1033,13 +1214,17 @@ function Mentors({
           <div className="empty-state">아직 멘토링 활동이 없습니다.</div>
         ) : logs.slice(0, 20).map((log) => {
           const mentor = studentMap.get(log.mentorId);
-          const mentee = studentMap.get(log.menteeId);
+          const mentee = log.menteeId ? studentMap.get(log.menteeId) : undefined;
           return (
-            <div className="timeline-row" key={log.id}>
+            <div className="timeline-row timeline-rich" key={log.id}>
               <span className="timeline-dot" />
               <div>
                 <strong>{mentor?.className} {mentor?.name}</strong>
-                <span> → {mentee?.className} {mentee?.name} 도움</span>
+                <span>{mentee ? ` → ${mentee.className} ${mentee.name} 도움` : ' · 일반 멘토링'}</span>
+                <small>
+                  {log.session ? `${log.session}차시` : '차시 미지정'}
+                  {log.memo ? ` · ${log.memo}` : ''}
+                </small>
               </div>
               <b>+{log.points}pt</b>
               <time>{formatTime(log.at)}</time>
@@ -1181,13 +1366,16 @@ function StudentModal({
         <div className="modal-log-list">
           {logs.length === 0 ? <div className="empty-state">멘토링 기록이 없습니다.</div> : logs.map((log) => {
             const mentor = map.get(log.mentorId);
-            const mentee = map.get(log.menteeId);
+            const mentee = log.menteeId ? map.get(log.menteeId) : undefined;
             return (
-              <div className="modal-log" key={log.id}>
+              <div className="modal-log modal-log-rich" key={log.id}>
                 <span>{log.mentorId === student.id ? '👑 도움 제공' : '🤝 도움 받음'}</span>
-                <strong>{mentor?.name} → {mentee?.name}</strong>
+                <strong>{mentor?.name}{mentee ? ` → ${mentee.name}` : ' · 일반 멘토링'}</strong>
                 <b>+{log.points}pt</b>
                 <time>{formatTime(log.at)}</time>
+                {(log.session || log.memo) && (
+                  <small>{log.session ? `${log.session}차시` : ''}{log.memo ? ` · ${log.memo}` : ''}</small>
+                )}
               </div>
             );
           })}
@@ -1197,55 +1385,294 @@ function StudentModal({
   );
 }
 
-function MentorModal({
+function SubmissionModal({
   students,
-  mentorId,
-  menteeId,
-  points,
-  setMentorId,
-  setMenteeId,
-  setPoints,
+  classFilter,
+  submissionLogs,
+  onRegister,
+  onClose,
+}: {
+  students: StudentState[];
+  classFilter: ClassFilter;
+  submissionLogs: SubmissionLog[];
+  onRegister: (studentId: string, session: number, mentorId?: string, memo?: string) => void;
+  onClose: () => void;
+}) {
+  const availableStudents = classFilter === '전체'
+    ? students
+    : students.filter((s) => s.className === classFilter);
+
+  const firstStudent = availableStudents[0] ?? students[0];
+  const [studentId, setStudentId] = useState(firstStudent?.id ?? '');
+  const selected = students.find((s) => s.id === studentId) ?? firstStudent;
+  const sessions = selected ? sessionsForClass(selected.className) : [];
+  const [session, setSession] = useState(1);
+  const [mentorId, setMentorId] = useState('');
+  const [memo, setMemo] = useState('');
+
+  useEffect(() => {
+    if (!selected) return;
+    if (session > CLASS_SESSION_LIMIT[selected.className]) setSession(1);
+    const existing = submissionLogs.find(
+      (log) => log.studentId === selected.id && log.session === session
+    );
+    setMemo(existing?.memo ?? '');
+    setMentorId(existing?.mentorId ?? '');
+  }, [studentId, session]);
+
+  if (!selected) return null;
+
+  const alreadyDone = selected.completed.includes(session);
+  const sameClassPeers = students.filter(
+    (s) => s.className === selected.className && s.id !== selected.id
+  );
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="modal-card form-modal submission-form-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="form-modal-header blue-header">
+          <div>
+            <span className="form-title-icon">✓</span>
+            <h2>학습지 실시간 제출 등록</h2>
+          </div>
+          <button className="plain-close" onClick={onClose}>×</button>
+        </div>
+
+        <div className="form-body">
+          <label className="field-block">
+            <span className="field-label"><b className="field-icon blue">♙</b> 제출 학생 선택 *</span>
+            <select
+              value={studentId}
+              onChange={(e) => {
+                setStudentId(e.target.value);
+                setSession(1);
+                setMentorId('');
+                setMemo('');
+              }}
+            >
+              {availableStudents.map((s) => (
+                <option key={s.id} value={s.id}>
+                  [1학년 {s.className.split('-')[1]}반] {s.name} (완료: {s.completed.length}/{CLASS_SESSION_LIMIT[s.className]}차시)
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field-block">
+            <span className="field-label"><b className="field-icon blue">▣</b> 학습지 차시 선택 * ({CLASS_SESSION_LIMIT[selected.className]}차시)</span>
+            <select value={session} onChange={(e) => setSession(Number(e.target.value))}>
+              {sessions.map((n) => (
+                <option key={n} value={n}>
+                  {n}차시{selected.completed.includes(n) ? ' (이미 제출됨)' : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="mentor-highlight">
+            <label className="field-block">
+              <span className="field-label mentor-label">👑 도움을 준 또래 멘토 지정 <em>(선택 시 신규 제출에 멘토 +1pt)</em></span>
+              <small>이 문제나 학습지를 풀 때 도움을 준 친구가 있다면 지목해 주세요.</small>
+              <select value={mentorId} onChange={(e) => setMentorId(e.target.value)}>
+                <option value="">(멘토 없음 / 스스로 해결)</option>
+                {sameClassPeers.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    [1학년 {s.className.split('-')[1]}반] {s.name} (현재 {s.mentorPoints}pt)
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <label className="field-block">
+            <span className="field-label"><b className="field-icon gray">▢</b> 선생님 확인 메모 (선택)</span>
+            <textarea
+              value={memo}
+              onChange={(e) => setMemo(e.target.value)}
+              placeholder="예: 방과후 지도 확인, 풀이과정 우수, 개념 설명 필요 등"
+              rows={3}
+            />
+          </label>
+
+          {alreadyDone && (
+            <div className="already-note">
+              이 차시는 이미 제출 처리되어 있습니다. 저장하면 메모/멘토 지정 기록만 갱신되며 제출 수는 중복 증가하지 않습니다.
+            </div>
+          )}
+        </div>
+
+        <div className="form-footer">
+          <button className="cancel-btn" onClick={onClose}>취소</button>
+          <button
+            className="complete-btn blue-complete"
+            onClick={() => onRegister(studentId, session, mentorId || undefined, memo)}
+          >
+            {alreadyDone ? '기록 저장' : '제출 등록 완료'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MentorPointModal({
+  students,
+  classFilter,
   onGive,
   onClose,
 }: {
   students: StudentState[];
-  mentorId: string;
-  menteeId: string;
-  points: number;
-  setMentorId: (id: string) => void;
-  setMenteeId: (id: string) => void;
-  setPoints: (points: number) => void;
-  onGive: () => void;
+  classFilter: ClassFilter;
+  onGive: (mentorId: string, menteeId: string | undefined, session: number | undefined, points: number, memo: string) => void;
+  onClose: () => void;
+}) {
+  const scopedStudents = classFilter === '전체'
+    ? students
+    : students.filter((s) => s.className === classFilter);
+  const firstMentor = scopedStudents[0] ?? students[0];
+
+  const [mentorId, setMentorId] = useState(firstMentor?.id ?? '');
+  const mentor = students.find((s) => s.id === mentorId) ?? firstMentor;
+  const [menteeId, setMenteeId] = useState('');
+  const [session, setSession] = useState<number | ''>(1);
+  const [points, setPoints] = useState(1);
+  const [memo, setMemo] = useState('');
+
+  const sameClassMentees = mentor
+    ? students.filter((s) => s.className === mentor.className && s.id !== mentor.id)
+    : [];
+
+  useEffect(() => {
+    setMenteeId('');
+    setSession(1);
+  }, [mentorId]);
+
+  if (!mentor) return null;
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="modal-card form-modal mentor-point-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="form-modal-header amber-header">
+          <div>
+            <span className="form-title-icon amber-icon">🏅</span>
+            <h2>멘토 포인트 수여하기</h2>
+          </div>
+          <button className="plain-close" onClick={onClose}>×</button>
+        </div>
+
+        <div className="form-body">
+          <label className="field-block">
+            <span className="field-label mentor-label">👑 도움을 준 멘토 학생 *</span>
+            <select value={mentorId} onChange={(e) => setMentorId(e.target.value)}>
+              {scopedStudents.map((s) => (
+                <option key={s.id} value={s.id}>
+                  [1학년 {s.className.split('-')[1]}반] {s.name} (현재 {s.mentorPoints}pt)
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field-block">
+            <span className="field-label">🤝 도움을 받은 학생 (멘티)</span>
+            <select value={menteeId} onChange={(e) => setMenteeId(e.target.value)}>
+              <option value="">(지정하지 않음 / 일반 우수 멘토링)</option>
+              {sameClassMentees.map((s) => (
+                <option key={s.id} value={s.id}>
+                  [1학년 {s.className.split('-')[1]}반] {s.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="two-field-row">
+            <label className="field-block">
+              <span className="field-label">관련 차시</span>
+              <select value={session} onChange={(e) => setSession(e.target.value ? Number(e.target.value) : '')}>
+                <option value="">차시 미지정</option>
+                {sessionsForClass(mentor.className).map((n) => (
+                  <option key={n} value={n}>{n}차시</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="field-block">
+              <span className="field-label">지급 포인트</span>
+              <select value={points} onChange={(e) => setPoints(Number(e.target.value))}>
+                <option value={1}>+1 포인트 (기본 문제 풀이 지도)</option>
+                <option value={2}>+2 포인트 (개념 설명·풀이 지원)</option>
+                <option value={3}>+3 포인트 (적극적·지속적 멘토링)</option>
+              </select>
+            </label>
+          </div>
+
+          <label className="field-block">
+            <span className="field-label">활동 내용 및 메모</span>
+            <textarea
+              value={memo}
+              onChange={(e) => setMemo(e.target.value)}
+              placeholder="예: 귀납법 증명 구조를 친절히 설명하여 급우 이해도 향상"
+              rows={3}
+            />
+          </label>
+        </div>
+
+        <div className="form-footer">
+          <button className="cancel-btn" onClick={onClose}>취소</button>
+          <button
+            className="complete-btn amber-complete"
+            onClick={() => onGive(mentorId, menteeId || undefined, session || undefined, points, memo)}
+          >
+            ✨ 포인트 부여
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsModal({
+  demoOn,
+  setDemoOn,
+  resetData,
+  onClose,
+}: {
+  demoOn: boolean;
+  setDemoOn: (value: boolean) => void;
+  resetData: () => void;
   onClose: () => void;
 }) {
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
-      <div className="modal-card mentor-modal" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="modal-card settings-modal" onMouseDown={(e) => e.stopPropagation()}>
         <button className="modal-close" onClick={onClose}>✕</button>
-        <h2>👑 멘토 포인트 주기</h2>
-        <p>친구의 문제 해결을 도운 학생에게 포인트를 지급합니다.</p>
+        <h2>⚙ 설정</h2>
+        <p>대시보드 데이터는 이 브라우저에 자동 저장됩니다.</p>
 
-        <label>
-          <span>멘토</span>
-          <select value={mentorId} onChange={(e) => setMentorId(e.target.value)}>
-            {students.map((s) => <option key={s.id} value={s.id}>{s.className} {s.id} {s.name}</option>)}
-          </select>
-        </label>
-
-        <label>
-          <span>멘티</span>
-          <select value={menteeId} onChange={(e) => setMenteeId(e.target.value)}>
-            {students.map((s) => <option key={s.id} value={s.id}>{s.className} {s.id} {s.name}</option>)}
-          </select>
-        </label>
-
-        <div className="point-buttons">
-          {[1, 2, 3].map((p) => (
-            <button key={p} className={points === p ? 'active' : ''} onClick={() => setPoints(p)}>+{p}pt</button>
-          ))}
+        <div className="setting-row">
+          <div>
+            <strong>실시간 수업 시뮬레이션</strong>
+            <span>제출·멘토 포인트가 자동으로 발생하는 데모 모드</span>
+          </div>
+          <button
+            className={demoOn ? 'switch-btn on' : 'switch-btn'}
+            onClick={() => setDemoOn(!demoOn)}
+          >
+            {demoOn ? 'ON' : 'OFF'}
+          </button>
         </div>
 
-        <button className="give-btn" onClick={onGive}>포인트 지급</button>
+        <div className="danger-setting">
+          <strong>수업 데이터 초기화</strong>
+          <span>제출 현황, 멘토 포인트, 활동 기록을 모두 0으로 되돌립니다.</span>
+          <button
+            onClick={() => {
+              resetData();
+              onClose();
+            }}
+          >
+            전체 데이터 초기화
+          </button>
+        </div>
       </div>
     </div>
   );
